@@ -29,6 +29,14 @@ func TestBatchQueue(t *testing.T) {
 			scenario: "putting into a queue awakes a goroutine in a get call",
 			function: testBatchQueuePutWakesSleepingGetter,
 		},
+		{
+			scenario: "the batch queue should resize when it runs out of space",
+			function: testBatchQueueResize,
+		},
+		{
+			scenario: "the batch queue should resize and maintain element order with mixed gets and puts",
+			function: testBatchQueueResizeMixedGetPut,
+		},
 	}
 
 	for _, test := range tests {
@@ -37,6 +45,159 @@ func TestBatchQueue(t *testing.T) {
 			t.Parallel()
 			testFunc(t)
 		})
+	}
+}
+
+func testBatchQueueResize(t *testing.T) {
+	bq := newBatchQueue(1)
+	wbs := []*writeBatch{
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+	}
+
+	for _, wb := range wbs {
+		_ = bq.Put(wb)
+	}
+
+	for _, wb := range wbs {
+		gwb := bq.Get()
+		if wb != gwb {
+			t.Fatalf("Get returned unexpected writeBatch got %v expected %v", wb, gwb)
+		}
+	}
+
+	if cap(bq.queue) != 8 {
+		t.Fatalf("batch queue did not resize backing array got %d expected %d", cap(bq.queue), 8)
+	}
+
+	for _, wb := range wbs {
+		_ = bq.Put(wb)
+	}
+
+	for _, wb := range wbs {
+		gwb := bq.Get()
+		if wb != gwb {
+			t.Fatalf("Get returned unexpected writeBatch got %v expected %v", wb, gwb)
+		}
+	}
+
+	if cap(bq.queue) != 8 {
+		t.Fatalf("batch queue did not resize backing array got %d expected %d", cap(bq.queue), 8)
+	}
+}
+
+func testBatchQueueResizeMixedGetPut(t *testing.T) {
+	bq := newBatchQueue(1)
+
+	wbs := []*writeBatch{
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+		newWriteBatch(time.Now(), time.Hour*100),
+	}
+
+	// Intial state: [<nil>]
+	//                  ^
+	//               readIdx/writeIdx
+	_ = bq.Put(wbs[0])
+	_ = bq.Put(wbs[1])
+
+	// Current state: [wbs[0], wbs[1]]
+	//                  ^
+	//               readIdx/writeIdx
+
+	if cap(bq.queue) != 2 {
+		t.Fatalf("batch queue did not resize backing array got %d expected %d", cap(bq.queue), 2)
+	}
+
+	wb := bq.Get()
+
+	// Current state: [<nil>, wbs[1]]
+	//                   ^     ^
+	//              writeIdx  readIdx
+
+	if wb != wbs[0] {
+		t.Fatalf("Get returned unexpected writeBatch got %v expected %v", wb, wbs[0])
+	}
+
+	_ = bq.Put(wbs[2])
+
+	// Current state: [wbs[2], wbs[1]]
+	//                          ^
+	//                        readIdx/writeIdx
+
+	if bq.isEmpty() {
+		t.Fatal("queue unexpectedly empty")
+	}
+
+	if cap(bq.queue) != 2 {
+		t.Fatalf("batch queue did not resize backing array got %d expected %d", cap(bq.queue), 2)
+	}
+
+	_ = bq.Put(wbs[3])
+
+	// Current state: [wbs[1], wbs[2], wbs[3], <nil>]
+	//                  ^                        ^
+	//                 readIdx                 writeIdx
+
+	if cap(bq.queue) != 4 {
+		t.Fatalf("batch queue did not resize backing array got %d expected %d", cap(bq.queue), 4)
+	}
+
+	wb = bq.Get()
+
+	// Current state: [<nil>, wbs[2], wbs[3], <nil>]
+	//                         ^                ^
+	//                        readIdx         writeIdx
+
+	if wb != wbs[1] {
+		t.Fatalf("Get returned unexpected writeBatch got %v expected %v", wb, wbs[1])
+	}
+
+	wb = bq.Get()
+
+	// Current state: [<nil>, <nil>, wbs[3], <nil>]
+	//                                ^        ^
+	//                              readIdx  writeIdx
+
+	if wb != wbs[2] {
+		t.Fatalf("Get returned unexpected writeBatch got %v expected %v", wb, wbs[2])
+	}
+
+	_ = bq.Put(wbs[4])
+	_ = bq.Put(wbs[5])
+	_ = bq.Put(wbs[6])
+	_ = bq.Put(wbs[7])
+
+	// Current state: [wbs[3], wbs[4], wbs[5], wbs[6], wbs[7], <nil>, <nil>, <nil>]
+	//                   ^                                       ^
+	//                readIdx                                  writeIdx
+
+	if cap(bq.queue) != 8 {
+		t.Fatalf("batch queue did not resize backing array got %d expected %d", cap(bq.queue), 8)
+	}
+
+	for _, wb := range wbs[3:] {
+		gwb := bq.Get()
+		if gwb != wb {
+			t.Fatalf("Get returned unexpected writeBatch got %v expected %v", gwb, wb)
+		}
+	}
+
+	// Current state: [ <nil>, <nil>, <nil>, <nil>, <nil>, <nil>, <nil>, <nil>]
+	//                    ^
+	//                readIdx/writeIdx
+
+	if !bq.isEmpty() {
+		t.Fatal("expected queue to be empty")
 	}
 }
 

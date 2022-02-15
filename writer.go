@@ -895,7 +895,30 @@ type batchQueue struct {
 	mutex *sync.Mutex
 	cond  *sync.Cond
 
+	readIdx  int
+	writeIdx int
+	full     bool
+
 	closed bool
+}
+
+// resizeIfNeeded should only be called when the mutex is already held.
+func (b *batchQueue) resizeIfNeeded() {
+	if !b.full {
+		return
+	}
+	newStorage := make([]*writeBatch, cap(b.queue)*2)
+
+	var n int
+	// copy from the readIdx to the end of the buffer
+	n = copy(newStorage, b.queue[b.readIdx:])
+	// copy the wrapped section
+	n += copy(newStorage[n:], b.queue[0:b.readIdx])
+
+	b.readIdx, b.writeIdx = 0, n
+
+	b.queue = newStorage
+	b.full = false
 }
 
 func (b *batchQueue) Put(batch *writeBatch) bool {
@@ -906,26 +929,39 @@ func (b *batchQueue) Put(batch *writeBatch) bool {
 	if b.closed {
 		return false
 	}
-	b.queue = append(b.queue, batch)
+	b.resizeIfNeeded()
+	b.queue[b.writeIdx] = batch
+	b.writeIdx = b.nextIdx(b.writeIdx)
+	if b.writeIdx == b.readIdx {
+		b.full = true
+	}
 	return true
+}
+
+func (b *batchQueue) isEmpty() bool {
+	return b.readIdx == b.writeIdx && !b.full
+}
+
+func (b *batchQueue) nextIdx(i int) int {
+	return (i + 1) % cap(b.queue)
 }
 
 func (b *batchQueue) Get() *writeBatch {
 	b.cond.L.Lock()
 	defer b.cond.L.Unlock()
 
-	for len(b.queue) == 0 && !b.closed {
+	for b.isEmpty() && !b.closed {
 		b.cond.Wait()
 	}
 
-	if len(b.queue) == 0 {
+	if b.isEmpty() {
 		return nil
 	}
 
-	batch := b.queue[0]
-	b.queue[0] = nil
-	b.queue = b.queue[1:]
-
+	batch := b.queue[b.readIdx]
+	b.queue[b.readIdx] = nil
+	b.readIdx = b.nextIdx(b.readIdx)
+	b.full = false
 	return batch
 }
 
@@ -939,9 +975,9 @@ func (b *batchQueue) Close() {
 
 func newBatchQueue(initialSize int) batchQueue {
 	bq := batchQueue{
-		queue: make([]*writeBatch, 0, initialSize),
+		queue: make([]*writeBatch, initialSize),
 		mutex: &sync.Mutex{},
-		cond: &sync.Cond{},
+		cond:  &sync.Cond{},
 	}
 
 	bq.cond.L = bq.mutex
