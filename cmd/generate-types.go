@@ -200,7 +200,6 @@ func (fs Fields) GenerateTags(versions, flexibleRange VersionRange) {
 		return
 	}
 	for i := range fs {
-		// fmt.Println("Generating tag for ", fs[i])
 		fs[i].GenerateTag(versions, flexibleRange)
 	}
 }
@@ -259,16 +258,34 @@ var helpers = template.FuncMap{
 	"backTick": func(s string) string {
 		return fmt.Sprintf("`%s`", s)
 	},
+	"packageName": func(s string) string {
+		s = stripReqResp(s)
+		return strings.ToLower(s)
+	},
+	"apiKeyName": func(s string) string {
+		return stripReqResp(s)
+	},
 }
 
-const requestTemplate = `
+func stripReqResp(s string) string {
+	s = strings.TrimSuffix(s, "Request")
+	s = strings.TrimSuffix(s, "Response")
+}
+
+const structTemplate = `
+package {{ .Name | packageName }}
+
+// {{ .Name }}
 type {{ printf "%s" .Type | normalizeName }} struct {
 {{ if .FlexibleVersions }}
+	// We need at least one tagged field to indicate that this is a "flexible" message
+	// type.
         _ struct{} {{ printf "kafka:\"min=%d,max=%d,tag\"" .FlexibleVersions.Min .FlexibleVersions.Max | backTick}}
 {{ end }}
 {{- range .Fields }}
+	// {{ .About }}
 	{{ .Name | normalizeName }} {{ printf "%s" .Type | normalizeType }} {{ printf "%s" .StructTag | backTick }}
-{{- end }}
+{{ end }}
 }
 
 {{ if or (eq "request" .Type) (eq "response" .Type )}}
@@ -276,9 +293,22 @@ func (r *{{ printf "%s" .Type | normalizeName }})  ApiKey() protocol.ApiKey { re
 {{ end }}
 `
 
+const apiKeyTemplate = `
+package protocol
+
+const (
+{{ range . }}
+	{{ .Name  }} ApiKey = {{ .APIKey }}
+{{ end }}
+)
+
+
+
+`
+
 func main() {
 	req := template.New("requests").Funcs(helpers)
-	reqTemplate, err := req.Parse(requestTemplate)
+	reqTemplate, err := req.Parse(structTemplate)
 	if err != nil {
 		panic(err)
 	}
@@ -288,10 +318,8 @@ func main() {
 	}
 
 	dec := json.NewDecoder(&r)
-
 	for {
 		var t APIType
-
 		if err := dec.Decode(&t); err != nil {
 			if errors.Is(err, io.EOF) {
 				return
@@ -299,8 +327,6 @@ func main() {
 
 			panic(err)
 		}
-
-		t.GenerateTags()
 
 		for _, field := range t.Fields {
 			if err := renderField(os.Stdout, field, reqTemplate); err != nil {
