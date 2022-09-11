@@ -201,6 +201,10 @@ type Writer struct {
 	// AllowAutoTopicCreation notifies writer to create topic if missing.
 	AllowAutoTopicCreation bool
 
+	// Unordered configures the writer to not preserve message order across
+	// batches.
+	Unordered bool
+
 	// Manages the current set of partition-topic writers.
 	group   sync.WaitGroup
 	mutex   sync.Mutex
@@ -952,8 +956,28 @@ func newPartitionWriter(w *Writer, key topicPartition) *partitionWriter {
 		queue: newBatchQueue(10),
 		w:     w,
 	}
-	w.spawn(writer.writeBatches)
+	if w.Unordered {
+		w.spawn(writer.writeBatchesUnordered)
+	} else {
+		w.spawn(writer.writeBatches)
+	}
+
 	return writer
+}
+
+func (ptw *partitionWriter) writeBatchesUnordered() {
+	for {
+		batch := ptw.queue.Get()
+
+		// The only time we can return nil is when the queue is closed
+		// and empty. If the queue is closed that means
+		// the Writer is closed so once we're here it's time to exit.
+		if batch == nil {
+			return
+		}
+
+		go ptw.writeBatch(batch)
+	}
 }
 
 func (ptw *partitionWriter) writeBatches() {
