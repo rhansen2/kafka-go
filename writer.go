@@ -29,7 +29,7 @@ import (
 //
 //		// Construct a synchronous writer (the default mode).
 //		w := &kafka.Writer{
-//			Addr:         Addr: kafka.TCP("localhost:9092", "localhost:9093", "localhost:9094"),
+//			Addr:         kafka.TCP("localhost:9092", "localhost:9093", "localhost:9094"),
 //			Topic:        "topic-A",
 //			RequiredAcks: kafka.RequireAll,
 //		}
@@ -68,11 +68,11 @@ import (
 // writer to receive notifications of messages being written to kafka:
 //
 //	w := &kafka.Writer{
-//		Addr:         Addr: kafka.TCP("localhost:9092", "localhost:9093", "localhost:9094"),
+//		Addr:         kafka.TCP("localhost:9092", "localhost:9093", "localhost:9094"),
 //		Topic:        "topic-A",
 //		RequiredAcks: kafka.RequireAll,
 //		Async:        true, // make the writer asynchronous
-//		Completion: func(messages []kafka.Message, err error) {
+//		Completion:   func(messages []kafka.Message, err error) {
 //			...
 //		},
 //	}
@@ -213,6 +213,8 @@ type Writer struct {
 	// AllowAutoTopicCreation notifies writer to create topic if missing.
 	AllowAutoTopicCreation bool
 
+	Unordered bool
+
 	// Manages the current set of partition-topic writers.
 	group   sync.WaitGroup
 	mutex   sync.Mutex
@@ -342,6 +344,8 @@ type WriterConfig struct {
 	// ErrorLogger is the logger used to report errors. If nil, the writer falls
 	// back to using Logger instead.
 	ErrorLogger Logger
+
+	Unordered bool
 }
 
 type topicPartition struct {
@@ -483,6 +487,7 @@ func NewWriter(config WriterConfig) *Writer {
 		Logger:       config.Logger,
 		ErrorLogger:  config.ErrorLogger,
 		Transport:    transport,
+		Unordered:    config.Unordered,
 		transport:    transport,
 		writerStats:  stats,
 	}
@@ -978,11 +983,15 @@ type partitionWriter struct {
 
 func newPartitionWriter(w *Writer, key topicPartition) *partitionWriter {
 	writer := &partitionWriter{
-		meta:  key,
-		queue: newBatchQueue(10),
-		w:     w,
+		meta: key,
+		w:    w,
 	}
-	w.spawn(writer.writeBatches)
+
+	if !w.Unordered {
+		writer.queue = newBatchQueue(10)
+		w.spawn(writer.writeBatches)
+	}
+
 	return writer
 }
 
@@ -999,6 +1008,17 @@ func (ptw *partitionWriter) writeBatches() {
 
 		ptw.writeBatch(batch)
 	}
+}
+
+func (ptw *partitionWriter) sendBatch(batch *writeBatch) {
+	if ptw.w.Unordered {
+		ptw.w.spawn(func() {
+			ptw.writeBatch(batch)
+		})
+		return
+	}
+
+	ptw.queue.Put(batch)
 }
 
 func (ptw *partitionWriter) writeMessages(msgs []Message, indexes []int32) map[*writeBatch][]int32 {
@@ -1022,14 +1042,14 @@ func (ptw *partitionWriter) writeMessages(msgs []Message, indexes []int32) map[*
 		}
 		if !batch.add(msgs[i], batchSize, batchBytes) {
 			batch.trigger()
-			ptw.queue.Put(batch)
+			ptw.sendBatch(batch)
 			ptw.currBatch = nil
 			goto assignMessage
 		}
 
 		if batch.full(batchSize, batchBytes) {
 			batch.trigger()
-			ptw.queue.Put(batch)
+			ptw.sendBatch(batch)
 			ptw.currBatch = nil
 		}
 
@@ -1062,7 +1082,7 @@ func (ptw *partitionWriter) awaitBatch(batch *writeBatch) {
 		// pw.currBatch != batch so we just move on.
 		// Otherwise, we detach the batch from the ptWriter and enqueue it for writing.
 		if ptw.currBatch == batch {
-			ptw.queue.Put(batch)
+			ptw.sendBatch(batch)
 			ptw.currBatch = nil
 		}
 		ptw.mutex.Unlock()
@@ -1166,12 +1186,14 @@ func (ptw *partitionWriter) close() {
 
 	if ptw.currBatch != nil {
 		batch := ptw.currBatch
-		ptw.queue.Put(batch)
+		ptw.sendBatch(batch)
 		ptw.currBatch = nil
 		batch.trigger()
 	}
 
-	ptw.queue.Close()
+	if !ptw.w.Unordered {
+		ptw.queue.Close()
+	}
 }
 
 type writeBatch struct {
