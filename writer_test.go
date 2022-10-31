@@ -98,7 +98,7 @@ func testBatchQueueGetWorksAfterClose(t *testing.T) {
 func TestWriter(t *testing.T) {
 	tests := []struct {
 		scenario string
-		function func(*testing.T)
+		function func(*testing.T, bool)
 	}{
 		{
 			scenario: "closing a writer right after creating it returns promptly with no error",
@@ -180,7 +180,14 @@ func TestWriter(t *testing.T) {
 		testFunc := test.function
 		t.Run(test.scenario, func(t *testing.T) {
 			t.Parallel()
-			testFunc(t)
+			t.Run("ordered", func(t *testing.T) {
+				t.Parallel()
+				testFunc(t, false)
+			})
+			t.Run("unordered", func(t *testing.T) {
+				t.Parallel()
+				testFunc(t, true)
+			})
 		})
 	}
 }
@@ -192,13 +199,14 @@ func newTestWriter(config WriterConfig) *Writer {
 	return NewWriter(config)
 }
 
-func testWriterClose(t *testing.T) {
+func testWriterClose(t *testing.T, unorderd bool) {
 	const topic = "test-writer-0"
 	createTopic(t, topic, 1)
 	defer deleteTopic(t, topic)
 
 	w := newTestWriter(WriterConfig{
-		Topic: topic,
+		Topic:     topic,
+		Unordered: unorderd,
 	})
 
 	if err := w.Close(); err != nil {
@@ -206,7 +214,7 @@ func testWriterClose(t *testing.T) {
 	}
 }
 
-func testWriterRequiredAcksNone(t *testing.T) {
+func testWriterRequiredAcksNone(t *testing.T, unorderd bool) {
 	topic := makeTopic()
 	createTopic(t, topic, 1)
 	defer deleteTopic(t, topic)
@@ -220,6 +228,7 @@ func testWriterRequiredAcksNone(t *testing.T) {
 		Balancer:     &RoundRobin{},
 		RequiredAcks: RequireNone,
 		Transport:    transport,
+		Unordered:    unorderd,
 	}
 	defer writer.Close()
 
@@ -234,7 +243,7 @@ func testWriterRequiredAcksNone(t *testing.T) {
 	}
 }
 
-func testWriterSetsRightBalancer(t *testing.T) {
+func testWriterSetsRightBalancer(t *testing.T, _ bool) {
 	const topic = "test-writer-1"
 	balancer := &CRC32Balancer{}
 	w := newTestWriter(WriterConfig{
@@ -248,8 +257,8 @@ func testWriterSetsRightBalancer(t *testing.T) {
 	}
 }
 
-func testWriterRoundRobin1(t *testing.T) {
-	const topic = "test-writer-1"
+func testWriterRoundRobin1(t *testing.T, unordered bool) {
+	topic := makeTopic()
 	createTopic(t, topic, 1)
 	defer deleteTopic(t, topic)
 
@@ -259,8 +268,9 @@ func testWriterRoundRobin1(t *testing.T) {
 	}
 
 	w := newTestWriter(WriterConfig{
-		Topic:    topic,
-		Balancer: &RoundRobin{},
+		Topic:     topic,
+		Balancer:  &RoundRobin{},
+		Unordered: unordered,
 	})
 	defer w.Close()
 
@@ -310,7 +320,7 @@ func TestValidateWriter(t *testing.T) {
 	}
 }
 
-func testWriterMaxAttemptsErr(t *testing.T) {
+func testWriterMaxAttemptsErr(t *testing.T, unordered bool) {
 	topic := makeTopic()
 	createTopic(t, topic, 1)
 	defer deleteTopic(t, topic)
@@ -320,6 +330,7 @@ func testWriterMaxAttemptsErr(t *testing.T) {
 		Topic:       topic,
 		MaxAttempts: 3,
 		Balancer:    &RoundRobin{},
+		Unordered:   unordered,
 	})
 	defer w.Close()
 
@@ -331,7 +342,7 @@ func testWriterMaxAttemptsErr(t *testing.T) {
 	}
 }
 
-func testWriterMaxBytes(t *testing.T) {
+func testWriterMaxBytes(t *testing.T, unordered bool) {
 	topic := makeTopic()
 	createTopic(t, topic, 1)
 	defer deleteTopic(t, topic)
@@ -339,6 +350,7 @@ func testWriterMaxBytes(t *testing.T) {
 	w := newTestWriter(WriterConfig{
 		Topic:      topic,
 		BatchBytes: 25,
+		Unordered:  unordered,
 	})
 	defer w.Close()
 
@@ -433,7 +445,7 @@ func readPartition(topic string, partition int, offset int64) (msgs []Message, e
 	}
 }
 
-func testWriterBatchBytes(t *testing.T) {
+func testWriterBatchBytes(t *testing.T, unordered bool) {
 	topic := makeTopic()
 	createTopic(t, topic, 1)
 	defer deleteTopic(t, topic)
@@ -448,6 +460,7 @@ func testWriterBatchBytes(t *testing.T) {
 		BatchBytes:   48,
 		BatchTimeout: math.MaxInt32 * time.Second,
 		Balancer:     &RoundRobin{},
+		Unordered:    unordered,
 	})
 	defer w.Close()
 
@@ -486,7 +499,7 @@ func testWriterBatchBytes(t *testing.T) {
 	}
 }
 
-func testWriterBatchSize(t *testing.T) {
+func testWriterBatchSize(t *testing.T, unordered bool) {
 	topic := makeTopic()
 	createTopic(t, topic, 1)
 	defer deleteTopic(t, topic)
@@ -501,6 +514,7 @@ func testWriterBatchSize(t *testing.T) {
 		BatchSize:    2,
 		BatchTimeout: math.MaxInt32 * time.Second,
 		Balancer:     &RoundRobin{},
+		Unordered:    unordered,
 	})
 	defer w.Close()
 
@@ -537,7 +551,7 @@ func testWriterBatchSize(t *testing.T) {
 	}
 }
 
-func testWriterSmallBatchBytes(t *testing.T) {
+func testWriterSmallBatchBytes(t *testing.T, unordered bool) {
 	topic := makeTopic()
 	createTopic(t, topic, 1)
 	defer deleteTopic(t, topic)
@@ -552,6 +566,7 @@ func testWriterSmallBatchBytes(t *testing.T) {
 		BatchBytes:   25,
 		BatchTimeout: 50 * time.Millisecond,
 		Balancer:     &RoundRobin{},
+		Unordered:    unordered,
 	})
 	defer w.Close()
 
@@ -588,7 +603,7 @@ func testWriterSmallBatchBytes(t *testing.T) {
 	}
 }
 
-func testWriterMultipleTopics(t *testing.T) {
+func testWriterMultipleTopics(t *testing.T, unordered bool) {
 	topic1 := makeTopic()
 	createTopic(t, topic1, 1)
 	defer deleteTopic(t, topic1)
@@ -608,7 +623,8 @@ func testWriterMultipleTopics(t *testing.T) {
 	}
 
 	w := newTestWriter(WriterConfig{
-		Balancer: &RoundRobin{},
+		Balancer:  &RoundRobin{},
+		Unordered: true,
 	})
 	defer w.Close()
 
@@ -654,13 +670,14 @@ func testWriterMultipleTopics(t *testing.T) {
 	}
 }
 
-func testWriterMissingTopic(t *testing.T) {
+func testWriterMissingTopic(t *testing.T, unordered bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	w := newTestWriter(WriterConfig{
 		// no topic
-		Balancer: &RoundRobin{},
+		Balancer:  &RoundRobin{},
+		Unordered: unordered,
 	})
 	defer w.Close()
 
@@ -672,7 +689,7 @@ func testWriterMissingTopic(t *testing.T) {
 	}
 }
 
-func testWriterInvalidPartition(t *testing.T) {
+func testWriterInvalidPartition(t *testing.T, unordered bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -684,6 +701,7 @@ func testWriterInvalidPartition(t *testing.T) {
 		Topic:       topic,
 		MaxAttempts: 1,                              // only try once to get the error back immediately
 		Balancer:    &staticBalancer{partition: -1}, // intentionally invalid partition
+		Unordered:   unordered,
 	})
 	defer w.Close()
 
@@ -697,7 +715,7 @@ func testWriterInvalidPartition(t *testing.T) {
 	}
 }
 
-func testWriterUnexpectedMessageTopic(t *testing.T) {
+func testWriterUnexpectedMessageTopic(t *testing.T, unordered bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -706,8 +724,9 @@ func testWriterUnexpectedMessageTopic(t *testing.T) {
 	defer deleteTopic(t, topic)
 
 	w := newTestWriter(WriterConfig{
-		Topic:    topic,
-		Balancer: &RoundRobin{},
+		Topic:     topic,
+		Balancer:  &RoundRobin{},
+		Unordered: unordered,
 	})
 	defer w.Close()
 
@@ -719,14 +738,15 @@ func testWriterUnexpectedMessageTopic(t *testing.T) {
 	}
 }
 
-func testWriterAutoCreateTopic(t *testing.T) {
+func testWriterAutoCreateTopic(t *testing.T, unordered bool) {
 	topic := makeTopic()
 	// Assume it's going to get created.
 	defer deleteTopic(t, topic)
 
 	w := newTestWriter(WriterConfig{
-		Topic:    topic,
-		Balancer: &RoundRobin{},
+		Topic:     topic,
+		Balancer:  &RoundRobin{},
+		Unordered: unordered,
 	})
 	w.AllowAutoTopicCreation = true
 	defer w.Close()
@@ -754,7 +774,7 @@ func testWriterAutoCreateTopic(t *testing.T) {
 	}
 }
 
-func testWriterTerminateMissingTopic(t *testing.T) {
+func testWriterTerminateMissingTopic(t *testing.T, unordered bool) {
 	topic := makeTopic()
 
 	transport := &Transport{}
@@ -767,6 +787,7 @@ func testWriterTerminateMissingTopic(t *testing.T) {
 		RequiredAcks:           RequireNone,
 		AllowAutoTopicCreation: false,
 		Transport:              transport,
+		Unordered:              unordered,
 	}
 	defer writer.Close()
 
@@ -778,7 +799,7 @@ func testWriterTerminateMissingTopic(t *testing.T) {
 	}
 }
 
-func testWriterSasl(t *testing.T) {
+func testWriterSasl(t *testing.T, unordered bool) {
 	topic := makeTopic()
 	defer deleteTopic(t, topic)
 	dialer := &Dialer{
@@ -790,9 +811,10 @@ func testWriterSasl(t *testing.T) {
 	}
 
 	w := newTestWriter(WriterConfig{
-		Dialer:  dialer,
-		Topic:   topic,
-		Brokers: []string{"localhost:9093"},
+		Dialer:    dialer,
+		Topic:     topic,
+		Brokers:   []string{"localhost:9093"},
+		Unordered: unordered,
 	})
 
 	w.AllowAutoTopicCreation = true
@@ -822,7 +844,7 @@ func testWriterSasl(t *testing.T) {
 	}
 }
 
-func testWriterDefaults(t *testing.T) {
+func testWriterDefaults(t *testing.T, _ bool) {
 	w := &Writer{}
 	defer w.Close()
 
