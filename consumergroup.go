@@ -482,10 +482,13 @@ func (g *Generation) heartbeatLoop(interval time.Duration) {
 					GenerationID: g.ID,
 					MemberID:     g.MemberID,
 				})
-				if err != nil {
-					return
+				if err == nil && resp.Error != nil {
+					err = resp.Error
 				}
-				if resp.Error != nil {
+				if err != nil {
+					g.logError(func(l Logger) {
+						l.Printf("heartbeat error: %v", err)
+					})
 					return
 				}
 			}

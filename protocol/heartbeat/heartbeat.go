@@ -22,6 +22,8 @@ func (r *Request) ApiKey() protocol.ApiKey {
 	return protocol.Heartbeat
 }
 
+func (r *Request) Group() string { return r.GroupID }
+
 type Response struct {
 	// We need at least one tagged field to indicate that this is a "flexible" message
 	// type.
